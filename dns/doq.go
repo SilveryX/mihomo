@@ -13,10 +13,11 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
+	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/quic-go"
 
+	"github.com/metacubex/quic-go"
 	D "github.com/miekg/dns"
 )
 
@@ -60,15 +61,16 @@ type dnsOverQUIC struct {
 	bytesPool      *sync.Pool
 	bytesPoolGuard sync.Mutex
 
-	addr   string
-	dialer *dnsDialer
+	addr           string
+	dialer         *dnsDialer
+	skipCertVerify bool
 }
 
 // type check
 var _ dnsClient = (*dnsOverQUIC)(nil)
 
 // newDoQ returns the DNS-over-QUIC Upstream.
-func newDoQ(resolver *Resolver, addr string, proxyAdapter C.ProxyAdapter, proxyName string) (dnsClient, error) {
+func newDoQ(addr string, resolver *Resolver, params map[string]string, proxyAdapter C.ProxyAdapter, proxyName string) *dnsOverQUIC {
 	doq := &dnsOverQUIC{
 		addr:   addr,
 		dialer: newDNSDialer(resolver, proxyAdapter, proxyName),
@@ -78,8 +80,12 @@ func newDoQ(resolver *Resolver, addr string, proxyAdapter C.ProxyAdapter, proxyN
 		},
 	}
 
+	if params["skip-cert-verify"] == "true" {
+		doq.skipCertVerify = true
+	}
+
 	runtime.SetFinalizer(doq, (*dnsOverQUIC).Close)
-	return doq, nil
+	return doq
 }
 
 // Address implements the Upstream interface for *dnsOverQUIC.
@@ -142,6 +148,10 @@ func (doq *dnsOverQUIC) Close() (err error) {
 	}
 
 	return err
+}
+
+func (doq *dnsOverQUIC) ResetConnection() {
+	doq.closeConnWithError(nil)
 }
 
 // exchangeQUIC attempts to open a QUIC connection, send the DNS message
@@ -324,7 +334,7 @@ func (doq *dnsOverQUIC) openConnection(ctx context.Context) (conn quic.Connectio
 	tlsConfig := ca.GetGlobalTLSConfig(
 		&tls.Config{
 			ServerName:         host,
-			InsecureSkipVerify: false,
+			InsecureSkipVerify: doq.skipCertVerify,
 			NextProtos: []string{
 				NextProtoDQ,
 			},
@@ -334,7 +344,7 @@ func (doq *dnsOverQUIC) openConnection(ctx context.Context) (conn quic.Connectio
 	transport := quic.Transport{Conn: udp}
 	transport.SetCreatedConn(true) // auto close conn
 	transport.SetSingleUse(true)   // auto close transport
-	conn, err = transport.Dial(ctx, &udpAddr, tlsConfig, doq.getQUICConfig())
+	conn, err = transport.Dial(ctx, &udpAddr, tlsC.UConfig(tlsConfig), doq.getQUICConfig())
 	if err != nil {
 		return nil, fmt.Errorf("opening quic connection to %s: %w", doq.addr, err)
 	}

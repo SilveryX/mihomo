@@ -64,7 +64,7 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 		listener, err = IN.NewTunnel(tunnelOption)
 	case "tun":
 		tunOption := &IN.TunOption{
-			Stack:     C.TunGvisor.String(),
+			Stack:     C.TunGvisor,
 			DNSHijack: []string{"0.0.0.0:53"}, // default hijack all dns query
 		}
 		err = decoder.Decode(mapping, tunOption)
@@ -86,6 +86,20 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 			return nil, err
 		}
 		listener, err = IN.NewVmess(vmessOption)
+	case "vless":
+		vlessOption := &IN.VlessOption{}
+		err = decoder.Decode(mapping, vlessOption)
+		if err != nil {
+			return nil, err
+		}
+		listener, err = IN.NewVless(vlessOption)
+	case "trojan":
+		trojanOption := &IN.TrojanOption{}
+		err = decoder.Decode(mapping, trojanOption)
+		if err != nil {
+			return nil, err
+		}
+		listener, err = IN.NewTrojan(trojanOption)
 	case "hysteria2":
 		hysteria2Option := &IN.Hysteria2Option{}
 		err = decoder.Decode(mapping, hysteria2Option)
@@ -106,6 +120,13 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 			return nil, err
 		}
 		listener, err = IN.NewTuic(tuicOption)
+	case "anytls":
+		anytlsOption := &IN.AnyTLSOption{}
+		err = decoder.Decode(mapping, anytlsOption)
+		if err != nil {
+			return nil, err
+		}
+		listener, err = IN.NewAnyTLS(anytlsOption)
 	default:
 		return nil, fmt.Errorf("unsupport proxy type: %s", proxyType)
 	}

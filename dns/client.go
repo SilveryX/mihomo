@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
+	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 
 	D "github.com/miekg/dns"
@@ -77,7 +79,7 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 		msg, _, err := c.Client.ExchangeWithConn(m, dConn)
 
 		// Resolvers MUST resend queries over TCP if they receive a truncated UDP response (with TC=1 set)!
-		if msg != nil && msg.Truncated && c.Client.Net == "" {
+		if msg != nil && msg.Truncated && network == "udp" {
 			tcpClient := *c.Client // copy a client
 			tcpClient.Net = "tcp"
 			network = "tcp"
@@ -102,4 +104,27 @@ func (c *client) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) 
 	case ret := <-ch:
 		return ret.msg, ret.err
 	}
+}
+
+func (c *client) ResetConnection() {}
+
+func newClient(addr string, resolver *Resolver, netType string, params map[string]string, proxyAdapter C.ProxyAdapter, proxyName string) *client {
+	host, port, _ := net.SplitHostPort(addr)
+	c := &client{
+		Client: &D.Client{
+			Net: netType,
+			TLSConfig: &tls.Config{
+				ServerName: host,
+			},
+			UDPSize: 4096,
+			Timeout: 5 * time.Second,
+		},
+		port:   port,
+		host:   host,
+		dialer: newDNSDialer(resolver, proxyAdapter, proxyName),
+	}
+	if params["skip-cert-verify"] == "true" {
+		c.TLSConfig.InsecureSkipVerify = true
+	}
+	return c
 }

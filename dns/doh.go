@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
+	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
 	D "github.com/miekg/dns"
@@ -36,13 +38,14 @@ const (
 	transportDefaultIdleConnTimeout = 5 * time.Minute
 
 	// dohMaxConnsPerHost controls the maximum number of connections for
-	// each host.
-	dohMaxConnsPerHost = 1
+	// each host.  Note, that setting it to 1 may cause issues with Go's http
+	// implementation, see https://github.com/AdguardTeam/dnsproxy/issues/278.
+	dohMaxConnsPerHost = 2
 	dialTimeout        = 10 * time.Second
 
 	// dohMaxIdleConns controls the maximum number of connections being idle
 	// at the same time.
-	dohMaxIdleConns = 1
+	dohMaxIdleConns = 2
 	maxElapsedTime  = time.Second * 30
 )
 
@@ -174,11 +177,23 @@ func (doh *dnsOverHTTPS) Close() (err error) {
 	return doh.closeClient(doh.client)
 }
 
-// closeClient cleans up resources used by client if necessary.  Note, that at
-// this point it should only be done for HTTP/3 as it may leak due to keep-alive
-// connections.
+func (doh *dnsOverHTTPS) ResetConnection() {
+	doh.clientMu.Lock()
+	defer doh.clientMu.Unlock()
+
+	if doh.client == nil {
+		return
+	}
+
+	_ = doh.closeClient(doh.client)
+	doh.client = nil
+}
+
+// closeClient cleans up resources used by client if necessary.
 func (doh *dnsOverHTTPS) closeClient(client *http.Client) (err error) {
-	if isHTTP3(client) {
+	client.CloseIdleConnections()
+
+	if isHTTP3(client) { // HTTP/3 may leak due to keep-alive connections.
 		return client.Transport.(io.Closer).Close()
 	}
 
@@ -479,6 +494,13 @@ func (h *http3Transport) Close() (err error) {
 	return h.baseTransport.Close()
 }
 
+func (h *http3Transport) CloseIdleConnections() {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	h.baseTransport.CloseIdleConnections()
+}
+
 // createTransportH3 tries to create an HTTP/3 transport for this upstream.
 // We should be able to fall back to H1/H2 in case if HTTP/3 is unavailable or
 // if it is too slow.  In order to do that, this method will run two probes
@@ -504,20 +526,20 @@ func (doh *dnsOverHTTPS) createTransportH3(
 			// Ignore the address and always connect to the one that we got
 			// from the bootstrapper.
 			_ string,
-			tlsCfg *tls.Config,
+			tlsCfg *tlsC.Config,
 			cfg *quic.Config,
 		) (c quic.EarlyConnection, err error) {
 			return doh.dialQuic(ctx, addr, tlsCfg, cfg)
 		},
 		DisableCompression: true,
-		TLSClientConfig:    tlsConfig,
+		TLSClientConfig:    tlsC.UConfig(tlsConfig),
 		QUICConfig:         doh.getQUICConfig(),
 	}
 
 	return &http3Transport{baseTransport: rt}, nil
 }
 
-func (doh *dnsOverHTTPS) dialQuic(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
+func (doh *dnsOverHTTPS) dialQuic(ctx context.Context, addr string, tlsCfg *tlsC.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
 	ip, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -586,7 +608,7 @@ func (doh *dnsOverHTTPS) probeH3(
 	// Run probeQUIC and probeTLS in parallel and see which one is faster.
 	chQuic := make(chan error, 1)
 	chTLS := make(chan error, 1)
-	go doh.probeQUIC(ctx, addr, probeTLSCfg, chQuic)
+	go doh.probeQUIC(ctx, addr, tlsC.UConfig(probeTLSCfg), chQuic)
 	go doh.probeTLS(ctx, probeTLSCfg, chTLS)
 
 	select {
@@ -611,7 +633,7 @@ func (doh *dnsOverHTTPS) probeH3(
 
 // probeQUIC attempts to establish a QUIC connection to the specified address.
 // We run probeQUIC and probeTLS in parallel and see which one is faster.
-func (doh *dnsOverHTTPS) probeQUIC(ctx context.Context, addr string, tlsConfig *tls.Config, ch chan error) {
+func (doh *dnsOverHTTPS) probeQUIC(ctx context.Context, addr string, tlsConfig *tlsC.Config, ch chan error) {
 	startTime := time.Now()
 	conn, err := doh.dialQuic(ctx, addr, tlsConfig, doh.getQUICConfig())
 	if err != nil {
