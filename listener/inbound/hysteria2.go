@@ -16,6 +16,8 @@ type Hysteria2Option struct {
 	ObfsPassword          string            `inbound:"obfs-password,omitempty"`
 	Certificate           string            `inbound:"certificate"`
 	PrivateKey            string            `inbound:"private-key"`
+	ClientAuthType        string            `inbound:"client-auth-type,omitempty"`
+	ClientAuthCert        string            `inbound:"client-auth-cert,omitempty"`
 	EchKey                string            `inbound:"ech-key,omitempty"`
 	MaxIdleTime           int               `inbound:"max-idle-time,omitempty"`
 	ALPN                  []string          `inbound:"alpn,omitempty"`
@@ -24,6 +26,7 @@ type Hysteria2Option struct {
 	IgnoreClientBandwidth bool              `inbound:"ignore-client-bandwidth,omitempty"`
 	Masquerade            string            `inbound:"masquerade,omitempty"`
 	CWND                  int               `inbound:"cwnd,omitempty"`
+	BBRProfile            string            `inbound:"bbr-profile,omitempty"`
 	UdpMTU                int               `inbound:"udp-mtu,omitempty"`
 	MuxOption             MuxOption         `inbound:"mux-option,omitempty"`
 
@@ -61,6 +64,8 @@ func NewHysteria2(options *Hysteria2Option) (*Hysteria2, error) {
 			ObfsPassword:          options.ObfsPassword,
 			Certificate:           options.Certificate,
 			PrivateKey:            options.PrivateKey,
+			ClientAuthType:        options.ClientAuthType,
+			ClientAuthCert:        options.ClientAuthCert,
 			EchKey:                options.EchKey,
 			MaxIdleTime:           options.MaxIdleTime,
 			ALPN:                  options.ALPN,
@@ -69,6 +74,7 @@ func NewHysteria2(options *Hysteria2Option) (*Hysteria2, error) {
 			IgnoreClientBandwidth: options.IgnoreClientBandwidth,
 			Masquerade:            options.Masquerade,
 			CWND:                  options.CWND,
+			BBRProfile:            options.BBRProfile,
 			UdpMTU:                options.UdpMTU,
 			MuxOption:             options.MuxOption.Build(),
 			// quic-go special config

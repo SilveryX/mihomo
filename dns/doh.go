@@ -2,13 +2,11 @@ package dns
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"runtime"
 	"strconv"
@@ -16,15 +14,15 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
-	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 
+	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
+	"github.com/metacubex/tls"
 	D "github.com/miekg/dns"
 	"golang.org/x/exp/slices"
-	"golang.org/x/net/http2"
 )
 
 // Values to configure HTTP and HTTP/2 transport.
@@ -397,12 +395,16 @@ func (doh *dnsOverHTTPS) createTransport(ctx context.Context) (t http.RoundTripp
 		return transport, nil
 	}
 
-	tlsConfig := ca.GetGlobalTLSConfig(
-		&tls.Config{
+	tlsConfig, err := ca.GetTLSConfig(ca.Option{
+		TLSConfig: &tls.Config{
 			InsecureSkipVerify:     doh.skipCertVerify,
 			MinVersion:             tls.VersionTLS12,
 			SessionTicketsDisabled: false,
-		})
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	var nextProtos []string
 	for _, v := range doh.httpVersions {
 		nextProtos = append(nextProtos, string(v))
@@ -435,8 +437,8 @@ func (doh *dnsOverHTTPS) createTransport(ctx context.Context) (t http.RoundTripp
 	// Explicitly configure transport to use HTTP/2.
 	//
 	// See https://github.com/AdguardTeam/dnsproxy/issues/11.
-	var transportH2 *http2.Transport
-	transportH2, err = http2.ConfigureTransports(transport)
+	var transportH2 *http.Http2Transport
+	transportH2, err = http.Http2ConfigureTransports(transport)
 	if err != nil {
 		return nil, err
 	}
@@ -447,12 +449,12 @@ func (doh *dnsOverHTTPS) createTransport(ctx context.Context) (t http.RoundTripp
 	return transport, nil
 }
 
-// http3Transport is a wrapper over *http3.RoundTripper that tries to optimize
+// http3Transport is a wrapper over *http3.Transport that tries to optimize
 // its behavior.  The main thing that it does is trying to force use a single
 // connection to a host instead of creating a new one all the time.  It also
 // helps mitigate race issues with quic-go.
 type http3Transport struct {
-	baseTransport *http3.RoundTripper
+	baseTransport *http3.Transport
 
 	closed bool
 	mu     sync.RWMutex
@@ -505,7 +507,7 @@ func (h *http3Transport) CloseIdleConnections() {
 // We should be able to fall back to H1/H2 in case if HTTP/3 is unavailable or
 // if it is too slow.  In order to do that, this method will run two probes
 // in parallel (one for TLS, the other one for QUIC) and if QUIC is faster it
-// will create the *http3.RoundTripper instance.
+// will create the *http3.Transport instance.
 func (doh *dnsOverHTTPS) createTransportH3(
 	ctx context.Context,
 	tlsConfig *tls.Config,
@@ -519,27 +521,27 @@ func (doh *dnsOverHTTPS) createTransportH3(
 		return nil, err
 	}
 
-	rt := &http3.RoundTripper{
+	rt := &http3.Transport{
 		Dial: func(
 			ctx context.Context,
 
 			// Ignore the address and always connect to the one that we got
 			// from the bootstrapper.
 			_ string,
-			tlsCfg *tlsC.Config,
+			tlsCfg *tls.Config,
 			cfg *quic.Config,
-		) (c quic.EarlyConnection, err error) {
+		) (c *quic.Conn, err error) {
 			return doh.dialQuic(ctx, addr, tlsCfg, cfg)
 		},
 		DisableCompression: true,
-		TLSClientConfig:    tlsC.UConfig(tlsConfig),
+		TLSClientConfig:    tlsConfig,
 		QUICConfig:         doh.getQUICConfig(),
 	}
 
 	return &http3Transport{baseTransport: rt}, nil
 }
 
-func (doh *dnsOverHTTPS) dialQuic(ctx context.Context, addr string, tlsCfg *tlsC.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
+func (doh *dnsOverHTTPS) dialQuic(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 	ip, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -552,11 +554,11 @@ func (doh *dnsOverHTTPS) dialQuic(ctx context.Context, addr string, tlsCfg *tlsC
 		IP:   net.ParseIP(ip),
 		Port: portInt,
 	}
-	conn, err := doh.dialer.ListenPacket(ctx, "udp", addr)
+	packetConn, err := doh.dialer.ListenPacket(ctx, "udp", addr)
 	if err != nil {
 		return nil, err
 	}
-	transport := quic.Transport{Conn: conn}
+	transport := quic.Transport{Conn: packetConn}
 	transport.SetCreatedConn(true) // auto close conn
 	transport.SetSingleUse(true)   // auto close transport
 	tlsCfg = tlsCfg.Clone()
@@ -566,7 +568,12 @@ func (doh *dnsOverHTTPS) dialQuic(ctx context.Context, addr string, tlsCfg *tlsC
 		// It's ok if net.SplitHostPort returns an error - it could be a hostname/IP address without a port.
 		tlsCfg.ServerName = doh.url.Host
 	}
-	return transport.DialEarly(ctx, &udpAddr, tlsCfg, cfg)
+	quicConn, err := transport.DialEarly(ctx, &udpAddr, tlsCfg, cfg)
+	if err != nil {
+		_ = packetConn.Close()
+		return nil, err
+	}
+	return quicConn, nil
 }
 
 // probeH3 runs a test to check whether QUIC is faster than TLS for this
@@ -608,7 +615,7 @@ func (doh *dnsOverHTTPS) probeH3(
 	// Run probeQUIC and probeTLS in parallel and see which one is faster.
 	chQuic := make(chan error, 1)
 	chTLS := make(chan error, 1)
-	go doh.probeQUIC(ctx, addr, tlsC.UConfig(probeTLSCfg), chQuic)
+	go doh.probeQUIC(ctx, addr, probeTLSCfg, chQuic)
 	go doh.probeTLS(ctx, probeTLSCfg, chTLS)
 
 	select {
@@ -633,7 +640,7 @@ func (doh *dnsOverHTTPS) probeH3(
 
 // probeQUIC attempts to establish a QUIC connection to the specified address.
 // We run probeQUIC and probeTLS in parallel and see which one is faster.
-func (doh *dnsOverHTTPS) probeQUIC(ctx context.Context, addr string, tlsConfig *tlsC.Config, ch chan error) {
+func (doh *dnsOverHTTPS) probeQUIC(ctx context.Context, addr string, tlsConfig *tls.Config, ch chan error) {
 	startTime := time.Now()
 	conn, err := doh.dialQuic(ctx, addr, tlsConfig, doh.getQUICConfig())
 	if err != nil {
@@ -723,14 +730,10 @@ func (doh *dnsOverHTTPS) tlsDial(ctx context.Context, network string, config *tl
 	// TLS handshake dialTimeout will be used as connection deadLine.
 	conn := tls.Client(rawConn, config)
 
-	err = conn.SetDeadline(time.Now().Add(dialTimeout))
-	if err != nil {
-		// Must not happen in normal circumstances.
-		log.Errorln("cannot set deadline: %v", err)
-		return nil, err
-	}
+	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
 
-	err = conn.Handshake()
+	err = conn.HandshakeContext(ctx)
 	if err != nil {
 		defer conn.Close()
 		return nil, err

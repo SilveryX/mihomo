@@ -6,7 +6,7 @@ import (
 	"errors"
 
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/constant/provider"
+	P "github.com/metacubex/mihomo/constant/provider"
 )
 
 type Selector struct {
@@ -14,8 +14,6 @@ type Selector struct {
 	disableUDP bool
 	selected   string
 	testUrl    string
-	Hidden     bool
-	Icon       string
 }
 
 // DialContext implements C.ProxyAdapter
@@ -68,8 +66,8 @@ func (s *Selector) MarshalJSON() ([]byte, error) {
 		"now":     s.Now(),
 		"all":     all,
 		"testUrl": url,
-		"hidden":  s.Hidden,
-		"icon":    s.Icon,
+		"hidden":  s.Hidden(),
+		"icon":    s.Icon(),
 	})
 }
 
@@ -108,11 +106,21 @@ func (s *Selector) selectedProxy(touch bool) C.Proxy {
 	return proxies[0]
 }
 
-func NewSelector(option *GroupCommonOption, providers []provider.ProxyProvider) *Selector {
+func (s *Selector) Providers() []P.ProxyProvider {
+	return s.providers
+}
+
+func (s *Selector) Proxies() []C.Proxy {
+	return s.GetProxies(false)
+}
+
+func NewSelector(option *GroupCommonOption, providers []P.ProxyProvider) *Selector {
 	return &Selector{
 		GroupBase: NewGroupBase(GroupBaseOption{
 			Name:           option.Name,
 			Type:           C.Selector,
+			Hidden:         option.Hidden,
+			Icon:           option.Icon,
 			Filter:         option.Filter,
 			ExcludeFilter:  option.ExcludeFilter,
 			ExcludeType:    option.ExcludeType,
@@ -123,7 +131,5 @@ func NewSelector(option *GroupCommonOption, providers []provider.ProxyProvider) 
 		selected:   "COMPATIBLE",
 		disableUDP: option.DisableUDP,
 		testUrl:    option.URL,
-		Hidden:     option.Hidden,
-		Icon:       option.Icon,
 	}
 }

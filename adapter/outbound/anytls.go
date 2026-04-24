@@ -6,8 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	CN "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/component/dialer"
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/component/proxydialer"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/anytls"
@@ -20,7 +19,6 @@ import (
 type AnyTLS struct {
 	*Base
 	client *anytls.Client
-	dialer proxydialer.SingDialer
 	option *AnyTLSOption
 }
 
@@ -36,6 +34,8 @@ type AnyTLSOption struct {
 	ClientFingerprint        string     `proxy:"client-fingerprint,omitempty"`
 	SkipCertVerify           bool       `proxy:"skip-cert-verify,omitempty"`
 	Fingerprint              string     `proxy:"fingerprint,omitempty"`
+	Certificate              string     `proxy:"certificate,omitempty"`
+	PrivateKey               string     `proxy:"private-key,omitempty"`
 	UDP                      bool       `proxy:"udp,omitempty"`
 	IdleSessionCheckInterval int        `proxy:"idle-session-check-interval,omitempty"`
 	IdleSessionTimeout       int        `proxy:"idle-session-timeout,omitempty"`
@@ -63,7 +63,7 @@ func (t *AnyTLS) ListenPacketContext(ctx context.Context, metadata *C.Metadata) 
 
 	// create uot on tcp
 	destination := M.SocksaddrFromNet(metadata.UDPAddr())
-	return newPacketConn(CN.NewThreadSafePacketConn(uot.NewLazyConn(c, uot.Request{Destination: destination})), t), nil
+	return newPacketConn(N.NewThreadSafePacketConn(uot.NewLazyConn(c, uot.Request{Destination: destination})), t), nil
 }
 
 // SupportUOT implements C.ProxyAdapter
@@ -86,22 +86,22 @@ func (t *AnyTLS) Close() error {
 func NewAnyTLS(option AnyTLSOption) (*AnyTLS, error) {
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
 	outbound := &AnyTLS{
-		Base: &Base{
-			name:   option.Name,
-			addr:   addr,
-			tp:     C.AnyTLS,
-			udp:    option.UDP,
-			tfo:    option.TFO,
-			mpTcp:  option.MPTCP,
-			iface:  option.Interface,
-			rmark:  option.RoutingMark,
-			prefer: C.NewDNSPrefer(option.IPVersion),
-		},
+		Base: NewBase(BaseOption{
+			Name:         option.Name,
+			Addr:         addr,
+			Type:         C.AnyTLS,
+			ProviderName: option.ProviderName,
+			UDP:          option.UDP,
+			TFO:          option.TFO,
+			MPTCP:        option.MPTCP,
+			Interface:    option.Interface,
+			RoutingMark:  option.RoutingMark,
+			Prefer:       option.IPVersion,
+		}),
 		option: &option,
 	}
-
-	singDialer := proxydialer.NewByNameSingDialer(option.DialerProxy, dialer.NewDialer(outbound.DialOptions()...))
-	outbound.dialer = singDialer
+	outbound.dialer = option.NewDialer(outbound.DialOptions())
+	singDialer := proxydialer.NewSingDialer(outbound.dialer)
 
 	tOption := anytls.ClientConfig{
 		Password:                 option.Password,
@@ -120,6 +120,8 @@ func NewAnyTLS(option AnyTLSOption) (*AnyTLS, error) {
 		SkipCertVerify:    option.SkipCertVerify,
 		NextProtos:        option.ALPN,
 		FingerPrint:       option.Fingerprint,
+		Certificate:       option.Certificate,
+		PrivateKey:        option.PrivateKey,
 		ClientFingerprint: option.ClientFingerprint,
 		ECH:               echConfig,
 	}

@@ -69,6 +69,7 @@ func testInboundTuic0(t *testing.T, inboundOptions inbound.TuicOption, outboundO
 	outboundOptions.Name = "tuic_outbound"
 	outboundOptions.Server = addrPort.Addr().String()
 	outboundOptions.Port = int(addrPort.Port())
+	outboundOptions.DialerForAPI = tunnel.NewDialer()
 
 	out, err := outbound.NewTuic(outboundOptions)
 	if !assert.NoError(t, err) {
@@ -92,6 +93,27 @@ func TestInboundTuic_TLS(t *testing.T) {
 	t.Run("ECH", func(t *testing.T) {
 		inboundOptions := inboundOptions
 		outboundOptions := outboundOptions
+		inboundOptions.EchKey = echKeyPem
+		outboundOptions.ECHOpts = outbound.ECHOptions{
+			Enable: true,
+			Config: echConfigBase64,
+		}
+		testInboundTuic(t, inboundOptions, outboundOptions)
+	})
+	t.Run("mTLS", func(t *testing.T) {
+		inboundOptions := inboundOptions
+		outboundOptions := outboundOptions
+		inboundOptions.ClientAuthCert = tlsAuthCertificate
+		outboundOptions.Certificate = tlsAuthCertificate
+		outboundOptions.PrivateKey = tlsAuthPrivateKey
+		testInboundTuic(t, inboundOptions, outboundOptions)
+	})
+	t.Run("mTLS+ECH", func(t *testing.T) {
+		inboundOptions := inboundOptions
+		outboundOptions := outboundOptions
+		inboundOptions.ClientAuthCert = tlsAuthCertificate
+		outboundOptions.Certificate = tlsAuthCertificate
+		outboundOptions.PrivateKey = tlsAuthPrivateKey
 		inboundOptions.EchKey = echKeyPem
 		outboundOptions.ECHOpts = outbound.ECHOptions{
 			Enable: true,

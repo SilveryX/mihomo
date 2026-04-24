@@ -15,6 +15,8 @@ type TuicOption struct {
 	Users                 map[string]string `inbound:"users,omitempty"`
 	Certificate           string            `inbound:"certificate"`
 	PrivateKey            string            `inbound:"private-key"`
+	ClientAuthType        string            `inbound:"client-auth-type,omitempty"`
+	ClientAuthCert        string            `inbound:"client-auth-cert,omitempty"`
 	EchKey                string            `inbound:"ech-key,omitempty"`
 	CongestionController  string            `inbound:"congestion-controller,omitempty"`
 	MaxIdleTime           int               `inbound:"max-idle-time,omitempty"`
@@ -22,6 +24,7 @@ type TuicOption struct {
 	ALPN                  []string          `inbound:"alpn,omitempty"`
 	MaxUdpRelayPacketSize int               `inbound:"max-udp-relay-packet-size,omitempty"`
 	CWND                  int               `inbound:"cwnd,omitempty"`
+	BBRProfile            string            `inbound:"bbr-profile,omitempty"`
 	MuxOption             MuxOption         `inbound:"mux-option,omitempty"`
 }
 
@@ -51,6 +54,8 @@ func NewTuic(options *TuicOption) (*Tuic, error) {
 			Users:                 options.Users,
 			Certificate:           options.Certificate,
 			PrivateKey:            options.PrivateKey,
+			ClientAuthType:        options.ClientAuthType,
+			ClientAuthCert:        options.ClientAuthCert,
 			EchKey:                options.EchKey,
 			CongestionController:  options.CongestionController,
 			MaxIdleTime:           options.MaxIdleTime,
@@ -58,6 +63,7 @@ func NewTuic(options *TuicOption) (*Tuic, error) {
 			ALPN:                  options.ALPN,
 			MaxUdpRelayPacketSize: options.MaxUdpRelayPacketSize,
 			CWND:                  options.CWND,
+			BBRProfile:            options.BBRProfile,
 			MuxOption:             options.MuxOption.Build(),
 		},
 	}, nil
